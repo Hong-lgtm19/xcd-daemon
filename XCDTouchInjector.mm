@@ -10,30 +10,29 @@
 
 typedef void *IOHIDEventRef;
 
-// event masks
 enum {
-    kIOHIDDigitizerEventRange    = 0x01,
-    kIOHIDDigitizerEventTouch    = 0x02,
-    kIOHIDDigitizerEventIdentity = 0x04,
-    kIOHIDDigitizerEventPosition = 0x08,
+    kIOHIDDigitizerEventRange     = 0x01,
+    kIOHIDDigitizerEventTouch     = 0x02,
+    kIOHIDDigitizerEventIdentity  = 0x04,
+    kIOHIDDigitizerEventPosition  = 0x08,
 };
 
-// event fields
 enum {
-    kIOHIDEventFieldIsBuiltIn               = 11,
+    kIOHIDEventFieldIsBuiltIn                    = 11,
     kIOHIDEventFieldDigitizerIsDisplayIntegrated = 87,
 };
 
 typedef void *(*FnCreateClient)(CFAllocatorRef);
 typedef void  (*FnDispatchEvent)(void *client, IOHIDEventRef event);
 typedef void  (*FnSetSenderID)(IOHIDEventRef event, uint64_t senderID);
-typedef void  (*FnSetIntegerValue)(IOHIDEventRef event, int field, int value);
+typedef void  (*FnSetIntegerValue)(IOHIDEventRef event, unsigned int field, int value);
 typedef void  (*FnAppendEvent)(IOHIDEventRef parent, IOHIDEventRef child);
 typedef IOHIDEventRef (*FnCreateDigitizerEvent)(
     CFAllocatorRef, uint64_t,
     unsigned int, unsigned int, unsigned int,
     unsigned int, unsigned int,
-    double, double, double, double, double, double, double, double);
+    double, double, double, double, double,
+    unsigned char, unsigned char, unsigned int);
 typedef IOHIDEventRef (*FnCreateFingerEvent)(
     CFAllocatorRef, uint64_t,
     unsigned int, unsigned int, unsigned int,
@@ -80,73 +79,73 @@ typedef IOHIDEventRef (*FnCreateFingerEvent)(
     _appendEvent        = (FnAppendEvent) dlsym(iokit, "IOHIDEventAppendEvent");
     _createDigitizerEvent = (FnCreateDigitizerEvent) dlsym(iokit, "IOHIDEventCreateDigitizerEvent");
     _createFingerEvent  = (FnCreateFingerEvent) dlsym(iokit, "IOHIDEventCreateDigitizerFingerEvent");
-    NSLog(@"[XCD] syms: create=%p dispatch=%p setSender=%p setInt=%p append=%p createDig=%p createFinger=%p",
-          _createClient, _dispatchEvent, _setSenderID, _setIntegerValue, _appendEvent, _createDigitizerEvent, _createFingerEvent);
     if (!_createClient || !_dispatchEvent || !_createDigitizerEvent || !_createFingerEvent) {
         NSLog(@"[XCD] resolve symbols failed");
         return;
     }
     self.client = _createClient(kCFAllocatorDefault);
     _ready = (self.client != NULL);
-    NSLog(@"[XCD] TouchInjector ready=%d client=%p", _ready, self.client);
+    NSLog(@"[XCD] TouchInjector ready=%d", _ready);
 }
 
 - (void)postTouchX:(float)x y:(float)y touchDown:(BOOL)down touchUp:(BOOL)up {
     if (!_ready) return;
 
-    uint32_t parentFlags, childFlags;
+    uint32_t handm, fingerm;
+    unsigned char tis = down ? 1 : 0;
+
     if (down) {
-        parentFlags = kIOHIDDigitizerEventRange | kIOHIDDigitizerEventTouch | kIOHIDDigitizerEventIdentity;
-        childFlags  = kIOHIDDigitizerEventRange | kIOHIDDigitizerEventTouch;
+        handm  = kIOHIDDigitizerEventRange | kIOHIDDigitizerEventTouch | kIOHIDDigitizerEventIdentity;
+        fingerm = kIOHIDDigitizerEventRange | kIOHIDDigitizerEventTouch;
     } else if (up) {
-        parentFlags = kIOHIDDigitizerEventRange | kIOHIDDigitizerEventTouch | kIOHIDDigitizerEventIdentity | kIOHIDDigitizerEventPosition;
-        childFlags  = kIOHIDDigitizerEventRange | kIOHIDDigitizerEventTouch;
+        handm  = kIOHIDDigitizerEventRange | kIOHIDDigitizerEventTouch | kIOHIDDigitizerEventIdentity | kIOHIDDigitizerEventPosition;
+        fingerm = kIOHIDDigitizerEventRange | kIOHIDDigitizerEventTouch;
     } else {
-        parentFlags = kIOHIDDigitizerEventPosition;
-        childFlags  = kIOHIDDigitizerEventPosition;
+        handm  = kIOHIDDigitizerEventPosition;
+        fingerm = kIOHIDDigitizerEventPosition;
     }
 
     uint64_t now = mach_absolute_time();
-    unsigned char touch = down ? 1 : 0;
 
-    IOHIDEventRef parent = _createDigitizerEvent(
+    IOHIDEventRef hand = _createDigitizerEvent(
         kCFAllocatorDefault,
         now,
         1,                    // transducerType = Hand
         1 << 22,              // index
         1,                    // identity
-        parentFlags,
+        handm,
         0,                    // buttonMask
-        x, y, 0, 0, 0, 0, 0, 0
+        x, y, 0, 0, 0,        // x, y, z, tipPressure, barrelPressure
+        0, 0,                 // range, touch (parent 不用)
+        0                     // options
     );
 
     if (_setIntegerValue) {
-        _setIntegerValue(parent, kIOHIDEventFieldIsBuiltIn, 1);
-        _setIntegerValue(parent, kIOHIDEventFieldDigitizerIsDisplayIntegrated, 1);
-    }
-    if (_setSenderID) {
-        _setSenderID(parent, 0x8000000817319375ULL);
+        _setIntegerValue(hand, kIOHIDEventFieldIsBuiltIn, 1);
+        _setIntegerValue(hand, kIOHIDEventFieldDigitizerIsDisplayIntegrated, 1);
     }
 
-    IOHIDEventRef child = _createFingerEvent(
+    IOHIDEventRef finger = _createFingerEvent(
         kCFAllocatorDefault,
         now,
-        3,                    // index
-        2,                    // identity
-        childFlags,
-        x, y, 0, 0, 0,
-        touch, touch,
-        0
+        3, 2,                 // index, identity
+        fingerm,
+        x, y, 0, 0, 0,        // x, y, z, tipPressure, twist
+        tis, tis,             // range, touch
+        0                     // options
     );
 
-    if (_appendEvent && parent && child) {
-        _appendEvent(parent, child);
+    if (_appendEvent && hand && finger) {
+        _appendEvent(hand, finger);
     }
-    if (child) CFRelease(child);
+    if (finger) CFRelease(finger);
 
-    if (parent) {
-        _dispatchEvent(self.client, parent);
-        CFRelease(parent);
+    if (hand) {
+        if (_setSenderID) {
+            _setSenderID(hand, 0x8000000817319372ULL);
+        }
+        _dispatchEvent(self.client, hand);
+        CFRelease(hand);
     }
 }
 
