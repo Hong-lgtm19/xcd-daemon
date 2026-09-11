@@ -24,8 +24,8 @@ typedef IOHIDEventRef (*FnCreateDigitizer)(
     CFAllocatorRef, CFDictionaryRef,
     unsigned int, unsigned int, unsigned int, unsigned int,
     unsigned char, unsigned char,
-    double, double, double, double, double, double, double, double,
-    unsigned int);
+    double, double, double, double, double, double, double, double, double,
+    unsigned int, unsigned long long);
 
 @interface XCDTouchInjector ()
 @property (nonatomic, assign) void *client;
@@ -105,8 +105,9 @@ typedef IOHIDEventRef (*FnCreateDigitizer)(
         p.x, p.y,
         0.0,
         touching ? 1.0 : 0.0,
-        0.0, 0.0,
-        0
+        0.0, 0.0, 0.0,
+        0,
+        0ULL
     );
 
     if (event) {
