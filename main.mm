@@ -139,6 +139,9 @@
 
 int main(int argc, char **argv) {
     @autoreleasepool {
+        system("killall XCDDaemon 2>/dev/null");
+        sleep(1);
+
         [UIApplication sharedApplication];
         XCDServer *server = [XCDServer new];
         [server start];
