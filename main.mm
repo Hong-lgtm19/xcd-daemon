@@ -1,16 +1,12 @@
 //
 //  main.mm — XCDDaemon 入口（越狱 iOS 后台守护进程）
 //
-//  职责：
-//    - 监听视频端口：把 H.264 流推给已连接的电脑端
-//    - 监听控制端口：解析触摸/按键消息，调用 TouchInjector
-//    - 串起 ScreenCapture -> VideoEncoder -> 网络发送
-//
-//  编译：用 theos 编成可执行文件；通过 launchd plist 开机自启。
-//
 
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
+#import <sys/socket.h>
+#import <netinet/in.h>
+#import <arpa/inet.h>
 #import "XCDProtocol.h"
 #import "XCDTouchInjector.h"
 #import "XCDVideoEncoder.h"
@@ -42,14 +38,14 @@
     if (fd < 0) return NO;
     int yes = 1;
     setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
+    setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &yes, sizeof(yes));
     struct sockaddr_in addr = {0};
     addr.sin_family = AF_INET;
-    addr.sin_addr.s_addr = htonl(INADDR_ANY);  // 监听所有网卡，电脑通过 Wi-Fi IP 直连
+    addr.sin_addr.s_addr = htonl(INADDR_ANY);
     addr.sin_port = htons(port);
     if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) { close(fd); return NO; }
     listen(fd, 4);
 
-    // GCD 异步 accept
     dispatch_source_t src = dispatch_source_create(DISPATCH_SOURCE_TYPE_READ, fd, 0, _ioQueue);
     dispatch_source_set_event_handler(src, ^{
         int cfd = accept(fd, NULL, NULL);
@@ -70,8 +66,6 @@
     [self listenOn:XCD_VIDEO_PORT];
     [self listenOn:XCD_CONTROL_PORT];
 
-    // 握手 hello：等控制通道连上后，电脑端会发 hello/ack
-    // 初始化采集 + 编码
     _capture = [[XCDScreenCapture alloc] init];
     _capture.delegate = self;
     _encoder = [[XCDVideoEncoder alloc] init];
@@ -87,22 +81,18 @@
           XCD_VIDEO_PORT, XCD_CONTROL_PORT, w, h);
 }
 
-#pragma mark - ScreenCapture delegate
 - (void)captureDidOutputPixelBuffer:(CVPixelBufferRef)pb {
     [_encoder encodePixelBuffer:pb];
 }
 
-#pragma mark - Encoder delegate -> video socket
 - (void)encoderDidOutputNALU:(NSData *)nalu isKeyframe:(BOOL)key {
     if (_videoFd < 0) return;
     dispatch_async(_ioQueue, ^{
-        send(self->_videoFd, nalu.bytes, nalu.length, MSG_NOSIGNAL);
+        send(self->_videoFd, nalu.bytes, nalu.length, 0);
     });
 }
 
-#pragma mark - Control channel reader
 - (void)startControlReader:(int)fd {
-    // 每个连接一个串行读循环
     dispatch_async(_ioQueue, ^{
         uint8_t buf[4096];
         while (self->_controlFd == fd) {
@@ -145,11 +135,11 @@
             }
             case XCDMsgPing: {
                 uint8_t pong = XCDMsgPong;
-                send(_controlFd, &pong, 1, MSG_NOSIGNAL);
+                send(_controlFd, &pong, 1, 0);
                 off += 1; break;
             }
             default:
-                off += 1; // 未识别，跳过
+                off += 1;
                 break;
         }
     }
@@ -157,7 +147,6 @@
 
 @end
 
-// 后台 daemon：需要 UIApplication 来访问 UIScreen 等
 @interface XCDAppDelegate : UIResponder <UIApplicationDelegate>
 @end
 @implementation XCDAppDelegate
@@ -165,16 +154,11 @@
 
 int main(int argc, char **argv) {
     @autoreleasepool {
-        // 以 UIApplication 方式启动（无界面），便于访问 UIScreen / IOHID
-        NSString *appid = @"com.xcd.daemon";
-        XCDAppDelegate *del = [XCDAppDelegate new];
         [UIApplication sharedApplication];
-        [[NSNotificationCenter defaultCenter] addObserverForName:nil object:nil queue:nil usingBlock:nil];
 
         XCDServer *server = [XCDServer new];
         [server start];
 
-        // 跑主运行循环
         [[NSRunLoop mainRunLoop] run];
         return 0;
     }
