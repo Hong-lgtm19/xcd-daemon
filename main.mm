@@ -1,5 +1,5 @@
 //
-//  main.mm — XCDDaemon 入口（越狱 iOS 后台守护进程）
+//  main.mm — XCDDaemon 入口
 //
 
 #import <Foundation/Foundation.h>
@@ -20,7 +20,6 @@
     int _controlFd;
     XCDScreenCapture *_capture;
     XCDVideoEncoder *_encoder;
-    dispatch_queue_t _ioQueue;
 }
 
 - (instancetype)init {
@@ -28,7 +27,6 @@
     if (self) {
         _videoFd = -1;
         _controlFd = -1;
-        _ioQueue = dispatch_queue_create("com.xcd.net", DISPATCH_QUEUE_SERIAL);
     }
     return self;
 }
@@ -45,21 +43,37 @@
     addr.sin_port = htons(port);
     if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) { close(fd); return NO; }
     listen(fd, 4);
+    NSLog(@"[XCD] listening on port %d", port);
 
-    dispatch_source_t src = dispatch_source_create(DISPATCH_SOURCE_TYPE_READ, fd, 0, _ioQueue);
-    dispatch_source_set_event_handler(src, ^{
-        int cfd = accept(fd, NULL, NULL);
-        if (cfd < 0) return;
-        NSLog(@"[XCD] client connected on port %d (fd=%d)", port, cfd);
-        if (port == XCD_VIDEO_PORT) {
-            self->_videoFd = cfd;
-        } else {
-            self->_controlFd = cfd;
-            [self startControlReader:cfd];
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_BACKGROUND, 0), ^{
+        while (YES) {
+            int cfd = accept(fd, NULL, NULL);
+            if (cfd < 0) continue;
+            NSLog(@"[XCD] client connected on port %d (fd=%d)", port, cfd);
+            if (port == XCD_VIDEO_PORT) {
+                self->_videoFd = cfd;
+            } else {
+                self->_controlFd = cfd;
+                dispatch_async(dispatch_get_global_queue(QOS_CLASS_BACKGROUND, 0), ^{
+                    [self controlLoop:cfd];
+                });
+            }
         }
     });
-    dispatch_resume(src);
     return YES;
+}
+
+- (void)controlLoop:(int)fd {
+    uint8_t buf[4096];
+    while (YES) {
+        ssize_t n = recv(fd, buf, sizeof(buf), 0);
+        if (n <= 0) {
+            NSLog(@"[XCD] control closed");
+            close(fd);
+            break;
+        }
+        [self dispatchBytes:buf length:n];
+    }
 }
 
 - (void)start {
@@ -87,25 +101,7 @@
 
 - (void)encoderDidOutputNALU:(NSData *)nalu isKeyframe:(BOOL)key {
     if (_videoFd < 0) return;
-    dispatch_async(_ioQueue, ^{
-        send(self->_videoFd, nalu.bytes, nalu.length, 0);
-    });
-}
-
-- (void)startControlReader:(int)fd {
-    dispatch_async(_ioQueue, ^{
-        uint8_t buf[4096];
-        while (self->_controlFd == fd) {
-            ssize_t n = recv(fd, buf, sizeof(buf), 0);
-            if (n <= 0) {
-                NSLog(@"[XCD] control closed");
-                close(fd);
-                self->_controlFd = -1;
-                break;
-            }
-            [self dispatchBytes:buf length:n];
-        }
-    });
+    send(self->_videoFd, nalu.bytes, nalu.length, 0);
 }
 
 - (void)dispatchBytes:(uint8_t *)buf length:(ssize_t)n {
@@ -155,10 +151,8 @@
 int main(int argc, char **argv) {
     @autoreleasepool {
         [UIApplication sharedApplication];
-
         XCDServer *server = [XCDServer new];
         [server start];
-
         [[NSRunLoop mainRunLoop] run];
         return 0;
     }
