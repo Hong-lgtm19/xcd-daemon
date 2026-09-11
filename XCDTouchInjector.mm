@@ -4,11 +4,8 @@
 
 #import "XCDTouchInjector.h"
 #import <Foundation/Foundation.h>
-#import <dlfcn.h>
-#import <unistd.h>
+#import <IOKit/hid/IOHIDEvent.h>
 #import <mach/mach_time.h>
-
-typedef void *IOHIDEventRef;
 
 enum {
     kIOHIDDigitizerEventRange     = 0x01,
@@ -22,37 +19,12 @@ enum {
     kIOHIDEventFieldDigitizerIsDisplayIntegrated = 87,
 };
 
-typedef void *(*FnCreateClient)(CFAllocatorRef);
-typedef void  (*FnDispatchEvent)(void *client, IOHIDEventRef event);
-typedef void  (*FnSetSenderID)(IOHIDEventRef event, uint64_t senderID);
-typedef void  (*FnSetIntegerValue)(IOHIDEventRef event, unsigned int field, int value);
-typedef void  (*FnAppendEvent)(IOHIDEventRef parent, IOHIDEventRef child);
-typedef IOHIDEventRef (*FnCreateDigitizerEvent)(
-    CFAllocatorRef, uint64_t,
-    unsigned int, unsigned int, unsigned int,
-    unsigned int, unsigned int,
-    double, double, double, double, double,
-    unsigned char, unsigned char, unsigned int);
-typedef IOHIDEventRef (*FnCreateFingerEvent)(
-    CFAllocatorRef, uint64_t,
-    unsigned int, unsigned int, unsigned int,
-    double, double, double, double, double,
-    unsigned char, unsigned char, unsigned int);
-
 @interface XCDTouchInjector ()
-@property (nonatomic, assign) void *client;
+@property (nonatomic, assign) IOHIDEventSystemClientRef client;
 @property (nonatomic, assign) BOOL ready;
 @end
 
-@implementation XCDTouchInjector {
-    FnCreateClient       _createClient;
-    FnDispatchEvent     _dispatchEvent;
-    FnSetSenderID        _setSenderID;
-    FnSetIntegerValue    _setIntegerValue;
-    FnAppendEvent        _appendEvent;
-    FnCreateDigitizerEvent _createDigitizerEvent;
-    FnCreateFingerEvent  _createFingerEvent;
-}
+@implementation XCDTouchInjector
 
 + (instancetype)sharedInjector {
     static XCDTouchInjector *inst;
@@ -64,35 +36,18 @@ typedef IOHIDEventRef (*FnCreateFingerEvent)(
 - (instancetype)init {
     self = [super init];
     if (self) {
-        [self resolvePrivateSymbols];
+        self.client = IOHIDEventSystemClientCreate(kCFAllocatorDefault);
+        _ready = (self.client != NULL);
+        NSLog(@"[XCD] TouchInjector ready=%d", _ready);
     }
     return self;
-}
-
-- (void)resolvePrivateSymbols {
-    void *iokit = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_LAZY);
-    if (!iokit) { NSLog(@"[XCD] IOKit dlopen failed"); return; }
-    _createClient       = (FnCreateClient) dlsym(iokit, "IOHIDEventSystemClientCreate");
-    _dispatchEvent      = (FnDispatchEvent) dlsym(iokit, "IOHIDEventSystemClientDispatchEvent");
-    _setSenderID        = (FnSetSenderID) dlsym(iokit, "IOHIDEventSetSenderID");
-    _setIntegerValue    = (FnSetIntegerValue) dlsym(iokit, "IOHIDEventSetIntegerValue");
-    _appendEvent        = (FnAppendEvent) dlsym(iokit, "IOHIDEventAppendEvent");
-    _createDigitizerEvent = (FnCreateDigitizerEvent) dlsym(iokit, "IOHIDEventCreateDigitizerEvent");
-    _createFingerEvent  = (FnCreateFingerEvent) dlsym(iokit, "IOHIDEventCreateDigitizerFingerEvent");
-    if (!_createClient || !_dispatchEvent || !_createDigitizerEvent || !_createFingerEvent) {
-        NSLog(@"[XCD] resolve symbols failed");
-        return;
-    }
-    self.client = _createClient(kCFAllocatorDefault);
-    _ready = (self.client != NULL);
-    NSLog(@"[XCD] TouchInjector ready=%d", _ready);
 }
 
 - (void)postTouchX:(float)x y:(float)y touchDown:(BOOL)down touchUp:(BOOL)up {
     if (!_ready) return;
 
     uint32_t handm, fingerm;
-    unsigned char tis = down ? 1 : 0;
+    Boolean tis = down ? true : false;
 
     if (down) {
         handm  = kIOHIDDigitizerEventRange | kIOHIDDigitizerEventTouch | kIOHIDDigitizerEventIdentity;
@@ -107,46 +62,38 @@ typedef IOHIDEventRef (*FnCreateFingerEvent)(
 
     uint64_t now = mach_absolute_time();
 
-    IOHIDEventRef hand = _createDigitizerEvent(
+    IOHIDEventRef hand = IOHIDEventCreateDigitizerEvent(
         kCFAllocatorDefault,
         now,
-        1,                    // transducerType = Hand
-        1 << 22,              // index
-        1,                    // identity
+        kIOHIDDigitizerTransducerTypeHand,
+        1 << 22,
+        1,
         handm,
-        0,                    // buttonMask
-        x, y, 0, 0, 0,        // x, y, z, tipPressure, barrelPressure
-        0, 0,                 // range, touch (parent 不用)
-        0                     // options
+        0,
+        x, y, 0, 0, 0,
+        false, false,
+        0
     );
 
-    if (_setIntegerValue) {
-        _setIntegerValue(hand, kIOHIDEventFieldIsBuiltIn, 1);
-        _setIntegerValue(hand, kIOHIDEventFieldDigitizerIsDisplayIntegrated, 1);
-    }
+    IOHIDEventSetIntegerValue(hand, kIOHIDEventFieldIsBuiltIn, true);
+    IOHIDEventSetIntegerValue(hand, kIOHIDEventFieldDigitizerIsDisplayIntegrated, true);
 
-    IOHIDEventRef finger = _createFingerEvent(
+    IOHIDEventRef finger = IOHIDEventCreateDigitizerFingerEvent(
         kCFAllocatorDefault,
         now,
-        3, 2,                 // index, identity
+        3, 2,
         fingerm,
-        x, y, 0, 0, 0,        // x, y, z, tipPressure, twist
-        tis, tis,             // range, touch
-        0                     // options
+        x, y, 0, 0, 0,
+        tis, tis,
+        0
     );
 
-    if (_appendEvent && hand && finger) {
-        _appendEvent(hand, finger);
-    }
-    if (finger) CFRelease(finger);
+    IOHIDEventAppendEvent(hand, finger);
+    CFRelease(finger);
 
-    if (hand) {
-        if (_setSenderID) {
-            _setSenderID(hand, 0x8000000817319372ULL);
-        }
-        _dispatchEvent(self.client, hand);
-        CFRelease(hand);
-    }
+    IOHIDEventSetSenderID(hand, 0x8000000817319372ULL);
+    IOHIDEventSystemClientDispatchEvent(self.client, hand);
+    CFRelease(hand);
 }
 
 - (void)touchDownX:(float)x y:(float)y touchId:(uint8_t)tid {
