@@ -76,8 +76,8 @@ typedef IOHIDEventRef (*FnCreateDigitizer)(
         NSLog(@"[XCD] resolve symbols failed");
         return;
     }
-    // type=3 = Root（最高权限）
-    self.client = _createClientWithType(kCFAllocatorDefault, 3, NULL);
+    // type=2 = Admin（参考代码用的就是这个）
+    self.client = _createClientWithType(kCFAllocatorDefault, 2, NULL);
     if (self.client && _setProperty) {
         _setProperty(self.client, CFSTR("HITestRootUserClient"), kCFBooleanTrue);
     }
