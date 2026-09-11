@@ -1,7 +1,5 @@
 //
 //  XCDTouchInjector.mm
-//  越狱 iOS 触摸注入：通过 IOHIDEventSystemClient 合成 Digitizer（触摸）事件。
-//  全部符号运行时 dlopen/dlsym，不依赖 theos 私有头。
 //
 
 #import "XCDTouchInjector.h"
@@ -63,11 +61,9 @@ typedef IOHIDEventRef (*FnCreateDigitizer)(
 - (void)resolvePrivateSymbols {
     void *iokit = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_LAZY);
     if (!iokit) { NSLog(@"[XCD] IOKit dlopen failed"); return; }
-
     _createClient   = (FnCreateClient)  dlsym(iokit, "IOHIDEventSystemClientCreate");
     _dispatchEvent  = (FnDispatchEvent) dlsym(iokit, "IOHIDEventSystemClientDispatchEvent");
     _createDigitizer = (FnCreateDigitizer) dlsym(iokit, "IOHIDEventCreateDigitizerEvent");
-
     if (!_createClient || !_dispatchEvent || !_createDigitizer) {
         NSLog(@"[XCD] resolve symbols failed");
         return;
@@ -94,7 +90,7 @@ typedef IOHIDEventRef (*FnCreateDigitizer)(
     };
     CFDictionaryRef propDict = (CFDictionaryRef)CFBridgingRetain(props);
 
-    unsigned char touching = (type == kXCDEventTouch) ? 1 : 0;
+    unsigned char touching = (type != kXCDEventRelease) ? 1 : 0;
 
     IOHIDEventRef event = _createDigitizer(
         kCFAllocatorDefault,
@@ -108,7 +104,7 @@ typedef IOHIDEventRef (*FnCreateDigitizer)(
         0.0, 0.0,
         p.x, p.y,
         0.0,
-        (type == kXCDEventTouch || type == kXCDEventRelease) ? 0.0 : 1.0,
+        (type == kXCDEventRelease) ? 0.0 : 1.0,
         0.0, 0.0,
         0
     );
@@ -142,7 +138,8 @@ typedef IOHIDEventRef (*FnCreateDigitizer)(
         kXCDEventTypeDigitizer,
         kXCDTransducerHand,
         tid, tid + 1,
-        0, 0,
+        0,
+        0,
         0.0, 0.0,
         0.0, 0.0,
         0.0, 0.0,
