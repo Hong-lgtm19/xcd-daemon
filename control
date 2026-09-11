@@ -1,0 +1,9 @@
+Package: com.xcd.daemon
+Name: XCDDaemon
+Version: 0.1.0
+Architecture: iphoneos-arm64
+Description: Wi-Fi screen mirror + touch control daemon for jailbroken iOS 13
+Maintainer: you
+Author: you
+Section: Networking
+Depends: mobilesubstrate
