@@ -1,18 +1,24 @@
 //
 //  XCDScreenCapture.mm
-//  越狱设备屏幕帧采集：IOMobileFramebuffer 拿共享 IOSurface，定时读回。
+//  越狱设备屏幕帧采集。
+//  IOMobileFramebuffer 和 IOSurface 全部运行时 dlopen/dlsym。
 //
 
 #import "XCDScreenCapture.h"
 #import <Foundation/Foundation.h>
-#import <IOKit/IOKitLib.h>
-#import <IOSurface/IOSurface.h>
+#import <CoreVideo/CoreVideo.h>
 #import <dlfcn.h>
 
 typedef void *IOMFBConnection;
+typedef void *IOSurfaceRef;
 
 typedef IOReturn (*IOMFBGetMainDisplay_t)(IOMFBConnection *);
 typedef IOReturn (*IOMFBGetSurface_t)(IOMFBConnection, int plane, IOSurfaceRef *);
+
+typedef size_t  (*ISGetWidth_t)(IOSurfaceRef);
+typedef size_t  (*ISGetHeight_t)(IOSurfaceRef);
+typedef void *  (*ISGetBaseAddr_t)(IOSurfaceRef);
+typedef size_t  (*ISGetBytesPerRow_t)(IOSurfaceRef);
 
 @interface XCDScreenCapture () {
     IOMFBConnection _framebuffer;
@@ -20,6 +26,11 @@ typedef IOReturn (*IOMFBGetSurface_t)(IOMFBConnection, int plane, IOSurfaceRef *
     int _width, _height;
     dispatch_source_t _timer;
     BOOL _running;
+
+    ISGetWidth_t       _isWidth;
+    ISGetHeight_t      _isHeight;
+    ISGetBaseAddr_t    _isBaseAddr;
+    ISGetBytesPerRow_t _isBPR;
 }
 @end
 
@@ -32,20 +43,20 @@ typedef IOReturn (*IOMFBGetSurface_t)(IOMFBConnection, int plane, IOSurfaceRef *
 
     IOMFBGetMainDisplay_t getMain = (IOMFBGetMainDisplay_t)dlsym(h, "IOMobileFramebufferGetMainDisplay");
     IOMFBGetSurface_t getSurface = (IOMFBGetSurface_t)dlsym(h, "IOMobileFramebufferGetLayerDefaultSurface");
+    if (!getMain || !getSurface) { NSLog(@"[XCD] IOMFB symbols not found"); return NO; }
+    if (getMain(&_framebuffer) != kIOReturnSuccess) { NSLog(@"[XCD] getMainDisplay failed"); return NO; }
+    if (getSurface(_framebuffer, 0, &_surface) != kIOReturnSuccess || !_surface) { NSLog(@"[XCD] getSurface failed"); return NO; }
 
-    if (!getMain || !getSurface) {
-        NSLog(@"[XCD] IOMFB symbols not found");
-        return NO;
-    }
-    if (getMain(&_framebuffer) != kIOReturnSuccess) {
-        NSLog(@"[XCD] getMainDisplay failed"); return NO;
-    }
-    if (getSurface(_framebuffer, 0, &_surface) != kIOReturnSuccess || !_surface) {
-        NSLog(@"[XCD] getSurface failed"); return NO;
-    }
+    void *ish = dlopen("/System/Library/Frameworks/IOSurface.framework/IOSurface", RTLD_LAZY);
+    if (!ish) { NSLog(@"[XCD] IOSurface dlopen failed"); return NO; }
+    _isWidth    = (ISGetWidth_t)dlsym(ish, "IOSurfaceGetWidth");
+    _isHeight   = (ISGetHeight_t)dlsym(ish, "IOSurfaceGetHeight");
+    _isBaseAddr = (ISGetBaseAddr_t)dlsym(ish, "IOSurfaceGetBaseAddress");
+    _isBPR      = (ISGetBytesPerRow_t)dlsym(ish, "IOSurfaceGetBytesPerRow");
+    if (!_isWidth || !_isHeight || !_isBaseAddr || !_isBPR) { NSLog(@"[XCD] IOSurface symbols not found"); return NO; }
 
-    _width  = (int)IOSurfaceGetWidth(_surface);
-    _height = (int)IOSurfaceGetHeight(_surface);
+    _width  = (int)_isWidth(_surface);
+    _height = (int)_isHeight(_surface);
     NSLog(@"[XCD] screen surface %dx%d", _width, _height);
 
     _running = YES;
@@ -67,8 +78,8 @@ typedef IOReturn (*IOMFBGetSurface_t)(IOMFBConnection, int plane, IOSurfaceRef *
     CVPixelBufferCreateWithBytes(kCFAllocatorDefault,
                                  _width, _height,
                                  kCVPixelFormatType_32BGRA,
-                                 IOSurfaceGetBaseAddress(_surface),
-                                 IOSurfaceGetBytesPerRow(_surface),
+                                 _isBaseAddr(_surface),
+                                 _isBPR(_surface),
                                  NULL, NULL, NULL, &pb);
     if (pb) {
         [self.delegate captureDidOutputPixelBuffer:pb];
@@ -85,3 +96,4 @@ typedef IOReturn (*IOMFBGetSurface_t)(IOMFBConnection, int plane, IOSurfaceRef *
 - (void)dealloc { [self stop]; }
 
 @end
+
