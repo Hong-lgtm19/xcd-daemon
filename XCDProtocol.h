@@ -1,8 +1,8 @@
 #ifndef XCDProtocol_h
 #define XCDProtocol_h
 
-#define XCD_VIDEO_PORT   8080
-#define XCD_CONTROL_PORT 8081
+#define XCD_VIDEO_PORT   9090
+#define XCD_CONTROL_PORT 9091
 
 typedef enum : uint8_t {
     XCDMsgHello       = 0x10,
