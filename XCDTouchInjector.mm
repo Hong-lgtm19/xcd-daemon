@@ -14,9 +14,9 @@ typedef unsigned int IOHIDDigitizerEventMask;
 
 static const IOHIDEventType kXCDEventTypeDigitizer = 11;
 static const IOHIDDigitizerTransducerType kXCDTransducerHand = 1;
-static const IOHIDDigitizerEventMask kXCDEventTouch = 1;
-static const IOHIDDigitizerEventMask kXCDEventPosition = 2;
-static const IOHIDDigitizerEventMask kXCDEventRelease = 4;
+static const IOHIDDigitizerEventMask kXCDEventTouch = 2;
+static const IOHIDDigitizerEventMask kXCDEventPosition = 4;
+static const IOHIDDigitizerEventMask kXCDEventTouchMove = 6;
 
 typedef void *(*FnCreateClient)(CFAllocatorRef);
 typedef void  (*FnDispatchEvent)(void *client, IOHIDEventRef event);
@@ -90,7 +90,7 @@ typedef IOHIDEventRef (*FnCreateDigitizer)(
     };
     CFDictionaryRef propDict = (CFDictionaryRef)CFBridgingRetain(props);
 
-    unsigned char touching = (type != kXCDEventRelease) ? 1 : 0;
+    unsigned char touching = (type != 0) ? 1 : 0;
 
     IOHIDEventRef event = _createDigitizer(
         kCFAllocatorDefault,
@@ -104,7 +104,7 @@ typedef IOHIDEventRef (*FnCreateDigitizer)(
         0.0, 0.0,
         p.x, p.y,
         0.0,
-        (type == kXCDEventRelease) ? 0.0 : 1.0,
+        touching ? 1.0 : 0.0,
         0.0, 0.0,
         0
     );
@@ -117,37 +117,15 @@ typedef IOHIDEventRef (*FnCreateDigitizer)(
 }
 
 - (void)touchDownX:(float)x y:(float)y touchId:(uint8_t)tid {
-    [self injectTouchType:kXCDEventTouch x:x y:y touchId:tid];
+    [self injectTouchType:kXCDEventTouchMove x:x y:y touchId:tid];
 }
 
 - (void)touchMoveX:(float)x y:(float)y touchId:(uint8_t)tid {
-    [self injectTouchType:kXCDEventPosition x:x y:y touchId:tid];
+    [self injectTouchType:kXCDEventTouchMove x:x y:y touchId:tid];
 }
 
 - (void)touchUpTouchId:(uint8_t)tid {
-    if (!_ready) return;
-    NSDictionary *props = @{
-        @"DigitizerIndex"     : @(tid),
-        @"DigitizerIdentity"  : @(tid + 1),
-        @"DigitizerEventMask" : @(kXCDEventRelease | kXCDEventTouch),
-    };
-    CFDictionaryRef propDict = (CFDictionaryRef)CFBridgingRetain(props);
-
-    IOHIDEventRef event = _createDigitizer(
-        kCFAllocatorDefault, propDict,
-        kXCDEventTypeDigitizer,
-        kXCDTransducerHand,
-        tid, tid + 1,
-        0,
-        0,
-        0.0, 0.0,
-        0.0, 0.0,
-        0.0, 0.0,
-        0.0, 0.0,
-        0
-    );
-    if (event) { _dispatchEvent(self.client, event); CFRelease(event); }
-    CFRelease(propDict);
+    [self injectTouchType:0 x:0 y:0 touchId:tid];
 }
 
 - (void)swipeFromX:(float)x1 y1:(float)y1 x2:(float)x2 y2:(float)y2 duration:(float)sec {
