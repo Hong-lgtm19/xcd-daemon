@@ -1,13 +1,13 @@
 /*
- * XCDProtocol.h — 电脑端 <-> iPhone daemon 控制通道协议定义
+ * XCDProtocol.h
  */
 
 #ifndef XCDProtocol_h
 #define XCDProtocol_h
 
 // ---- 端口 ----
-#define XCD_VIDEO_PORT   23456
-#define XCD_CONTROL_PORT 23458
+#define XCD_VIDEO_PORT   23466
+#define XCD_CONTROL_PORT 23468
 
 // ---- 消息类型 ----
 typedef enum : uint8_t {
