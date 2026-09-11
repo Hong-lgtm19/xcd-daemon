@@ -1,0 +1,39 @@
+name: Build XCD Daemon
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, master ]
+
+jobs:
+  build:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup theos
+        run: |
+          sudo git clone --recursive https://github.com/theos/theos.git /opt/theos
+          echo "THEOS=/opt/theos" >> $GITHUB_ENV
+
+      - name: Setup ldid
+        run: |
+          if ! command -v ldid >/dev/null; then
+            brew install ldid || true
+          fi
+
+      - name: Build deb
+        run: |
+          export THEOS=/opt/theos
+          make clean || true
+          make package FINALPACKAGE=1
+
+      - name: Upload deb artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: xcd-daemon-deb
+          path: |
+            packages/*.deb
+          if-no-files-found: error
