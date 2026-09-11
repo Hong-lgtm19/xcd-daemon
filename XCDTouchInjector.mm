@@ -18,9 +18,10 @@ static const IOHIDDigitizerEventMask kXCDEventTouch = 2;
 static const IOHIDDigitizerEventMask kXCDEventPosition = 4;
 static const IOHIDDigitizerEventMask kXCDEventTouchMove = 6;
 
-typedef void *(*FnCreateClient)(CFAllocatorRef);
+typedef void *(*FnCreateClientWithType)(CFAllocatorRef, unsigned int, CFDictionaryRef);
 typedef void  (*FnDispatchEvent)(void *client, IOHIDEventRef event);
 typedef void  (*FnSetProperty)(void *client, CFStringRef key, CFTypeRef value);
+typedef void  (*FnSetSenderID)(IOHIDEventRef event, uint64_t senderID);
 typedef IOHIDEventRef (*FnCreateDigitizer)(
     CFAllocatorRef, CFDictionaryRef,
     unsigned int, unsigned int, unsigned int, unsigned int,
@@ -34,10 +35,11 @@ typedef IOHIDEventRef (*FnCreateDigitizer)(
 @end
 
 @implementation XCDTouchInjector {
-    FnCreateClient   _createClient;
+    FnCreateClientWithType _createClientWithType;
     FnDispatchEvent  _dispatchEvent;
     FnCreateDigitizer _createDigitizer;
     FnSetProperty    _setProperty;
+    FnSetSenderID    _setSenderID;
     CGFloat _screenW;
     CGFloat _screenH;
 }
@@ -63,15 +65,17 @@ typedef IOHIDEventRef (*FnCreateDigitizer)(
 - (void)resolvePrivateSymbols {
     void *iokit = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_LAZY);
     if (!iokit) { NSLog(@"[XCD] IOKit dlopen failed"); return; }
-    _createClient   = (FnCreateClient)  dlsym(iokit, "IOHIDEventSystemClientCreate");
+    _createClientWithType = (FnCreateClientWithType) dlsym(iokit, "IOHIDEventSystemClientCreateWithType");
     _dispatchEvent  = (FnDispatchEvent) dlsym(iokit, "IOHIDEventSystemClientDispatchEvent");
     _createDigitizer = (FnCreateDigitizer) dlsym(iokit, "IOHIDEventCreateDigitizerEvent");
     _setProperty    = (FnSetProperty) dlsym(iokit, "IOHIDEventSystemClientSetProperty");
-    if (!_createClient || !_dispatchEvent || !_createDigitizer) {
+    _setSenderID    = (FnSetSenderID) dlsym(iokit, "IOHIDEventSetSenderID");
+    if (!_createClientWithType || !_dispatchEvent || !_createDigitizer) {
         NSLog(@"[XCD] resolve symbols failed");
         return;
     }
-    self.client = _createClient(kCFAllocatorDefault);
+    // type=1 = kIOHIDEventSystemClientTypeAdmin
+    self.client = _createClientWithType(kCFAllocatorDefault, 1, NULL);
     if (self.client && _setProperty) {
         _setProperty(self.client, CFSTR("HITestRootUserClient"), kCFBooleanTrue);
     }
@@ -117,6 +121,9 @@ typedef IOHIDEventRef (*FnCreateDigitizer)(
     );
 
     if (event) {
+        if (_setSenderID) {
+            _setSenderID(event, 0xDEFACEDBEEFFECE5ULL);
+        }
         _dispatchEvent(self.client, event);
         CFRelease(event);
     }
