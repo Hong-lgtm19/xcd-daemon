@@ -5,7 +5,7 @@ include $(THEOS)/makefiles/common.mk
 
 TOOL_NAME = XCDDaemon
 XCDDaemon_FILES = main.mm XCDTouchInjector.mm XCDVideoEncoder.mm XCDScreenCapture.mm
-XCDDaemon_CFLAGS = -fobjc-arc -I. -miphoneos-version-min=13.0
+XCDDaemon_CFLAGS = -fobjc-arc -I. -miphoneos-version-min=13.0 -Wno-error -Wno-module-import-in-extern-c
 XCDDaemon_FRAMEWORKS = UIKit Foundation CoreGraphics CoreVideo VideoToolbox CoreMedia IOKit
 
 include $(THEOS_MAKE_PATH)/tool.mk
