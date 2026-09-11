@@ -1,29 +1,22 @@
 //
 //  XCDScreenCapture.mm
-//  越狱设备屏幕帧采集。
-//
-//  原理：通过 IOKit 打开显示控制器（display controller），建立一块与
-//  屏幕背后共享的 IOSurface，按帧率把它读回为 CVPixelBuffer。
-//  这是 Veency / ioscpy 等同类工具采用的标准路径，属私有 API。
-//
-//  【版本敏感提示】IOService 名与 IOConnect 选择器在不同 iOS 小版本上
-//  可能不同；在 iOS 13.6 上若编译/运行报错，按以下顺序核对：
-//    1) IOService 名（常见 "AppleCLCD" / "H11CBUART" / display driver）
-//    2) connect/scalar 选择器索引
-//  参考开源：github.com/nicknah/veency、github.com/lautarovculic/ioscpy
+//  越狱设备屏幕帧采集：IOMobileFramebuffer 拿共享 IOSurface，定时读回。
 //
 
 #import "XCDScreenCapture.h"
 #import <Foundation/Foundation.h>
 #import <IOKit/IOKitLib.h>
-#import <IOKit/IOMobileFramebuffer.h>
 #import <IOSurface/IOSurface.h>
 #import <dlfcn.h>
 
+typedef void *IOMFBConnection;
+
+typedef IOReturn (*IOMFBGetMainDisplay_t)(IOMFBConnection *);
+typedef IOReturn (*IOMFBGetSurface_t)(IOMFBConnection, int plane, IOSurfaceRef *);
+
 @interface XCDScreenCapture () {
-    IOMobileFramebufferConnection _framebuffer;
+    IOMFBConnection _framebuffer;
     IOSurfaceRef _surface;
-    CVPixelBufferPoolRef _pool;
     int _width, _height;
     dispatch_source_t _timer;
     BOOL _running;
@@ -34,17 +27,14 @@
 @synthesize width = _width, height = _height;
 
 - (BOOL)startWithFPS:(int)fps {
-    // 1) 打开 mobile framebuffer（私有框架 IOMobileFramebuffer）
     void *h = dlopen("/System/Library/PrivateFrameworks/IOMobileFramebuffer.framework/IOMobileFramebuffer", RTLD_LAZY);
     if (!h) { NSLog(@"[XCD] IOMobileFramebuffer dlopen failed"); return NO; }
 
-    typedef IOReturn (*IOMFBGetMainDisplay_t)(IOMobileFramebufferConnection *);
-    typedef IOReturn (*IOMFBLGetSurface_t)(IOMobileFramebufferConnection, IOSurfaceRef *);
-    IOMFBGetMainDisplay_t getMain = dlsym(h, "IOMobileFramebufferGetMainDisplay");
-    IOMFBLGetSurface_t getSurface = dlsym(h, "IOMobileFramebufferGetLayerDefaultSurface");
+    IOMFBGetMainDisplay_t getMain = (IOMFBGetMainDisplay_t)dlsym(h, "IOMobileFramebufferGetMainDisplay");
+    IOMFBGetSurface_t getSurface = (IOMFBGetSurface_t)dlsym(h, "IOMobileFramebufferGetLayerDefaultSurface");
 
     if (!getMain || !getSurface) {
-        NSLog(@"[XCD] IOMFB symbols not found (version-specific)");
+        NSLog(@"[XCD] IOMFB symbols not found");
         return NO;
     }
     if (getMain(&_framebuffer) != kIOReturnSuccess) {
@@ -58,7 +48,6 @@
     _height = (int)IOSurfaceGetHeight(_surface);
     NSLog(@"[XCD] screen surface %dx%d", _width, _height);
 
-    // 2) 定时抓帧
     _running = YES;
     NSTimeInterval interval = 1.0 / fps;
     _timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0,
@@ -74,10 +63,7 @@
 - (void)grabFrame {
     if (!_running || !_surface) return;
 
-    // 把 IOSurface 锁内存，包成 CVPixelBuffer 交给编码器
-    // （这里直接复用 surface；生产中为避免与显示合成竞争，可复制一层）
     CVPixelBufferRef pb = NULL;
-    // IOSurface 与 CVPixelBuffer 可桥接；直接让编码器吃 IOSurface-backed buffer。
     CVPixelBufferCreateWithBytes(kCFAllocatorDefault,
                                  _width, _height,
                                  kCVPixelFormatType_32BGRA,
