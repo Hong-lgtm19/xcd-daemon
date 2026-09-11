@@ -1,3 +1,7 @@
+//
+//  main.mm — XCDDaemon 入口
+//
+
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <sys/socket.h>
@@ -5,6 +9,8 @@
 #import <arpa/inet.h>
 #import <errno.h>
 #import <string.h>
+#import <unistd.h>
+#import <sys/wait.h>
 #import "XCDProtocol.h"
 #import "XCDTouchInjector.h"
 #import "XCDVideoEncoder.h"
@@ -139,7 +145,12 @@
 
 int main(int argc, char **argv) {
     @autoreleasepool {
-        system("killall XCDDaemon 2>/dev/null");
+        pid_t old = fork();
+        if (old == 0) {
+            execl("/bin/killall", "killall", "XCDDaemon", NULL);
+            _exit(0);
+        }
+        waitpid(old, NULL, 0);
         sleep(1);
 
         [UIApplication sharedApplication];
