@@ -1,7 +1,3 @@
-//
-//  main.mm — XCDDaemon 入口
-//
-
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <sys/socket.h>
@@ -26,10 +22,7 @@
 
 - (instancetype)init {
     self = [super init];
-    if (self) {
-        _videoFd = -1;
-        _controlFd = -1;
-    }
+    if (self) { _videoFd = -1; _controlFd = -1; }
     return self;
 }
 
@@ -40,14 +33,13 @@
         return NO;
     }
     int yes = 1;
-    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
     setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &yes, sizeof(yes));
     struct sockaddr_in addr = {0};
     addr.sin_family = AF_INET;
     addr.sin_addr.s_addr = htonl(INADDR_ANY);
     addr.sin_port = htons(port);
     if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-        NSLog(@"[XCD] bind port %d failed: %s", port, strerror(errno));
+        NSLog(@"[XCD] bind port %d failed: %s (errno=%d)", port, strerror(errno), errno);
         close(fd);
         return NO;
     }
@@ -76,11 +68,7 @@
     uint8_t buf[4096];
     while (YES) {
         ssize_t n = recv(fd, buf, sizeof(buf), 0);
-        if (n <= 0) {
-            NSLog(@"[XCD] control closed");
-            close(fd);
-            break;
-        }
+        if (n <= 0) { close(fd); break; }
         [self dispatchBytes:buf length:n];
     }
 }
@@ -88,26 +76,20 @@
 - (void)start {
     [self listenOn:XCD_VIDEO_PORT];
     [self listenOn:XCD_CONTROL_PORT];
-
     _capture = [[XCDScreenCapture alloc] init];
     _capture.delegate = self;
     _encoder = [[XCDVideoEncoder alloc] init];
     _encoder.delegate = self;
-
     UIScreen *s = [UIScreen mainScreen];
     int w = (int)s.nativeBounds.size.width;
     int h = (int)s.nativeBounds.size.height;
     [_encoder configureWithWidth:w height:h fps:30 bitrateKbps:4000];
     [_capture startWithFPS:30];
-
     NSLog(@"[XCD] daemon started. video=%d control=%d screen=%dx%d",
           XCD_VIDEO_PORT, XCD_CONTROL_PORT, w, h);
 }
 
-- (void)captureDidOutputPixelBuffer:(CVPixelBufferRef)pb {
-    [_encoder encodePixelBuffer:pb];
-}
-
+- (void)captureDidOutputPixelBuffer:(CVPixelBufferRef)pb { [_encoder encodePixelBuffer:pb]; }
 - (void)encoderDidOutputNALU:(NSData *)nalu isKeyframe:(BOOL)key {
     if (_videoFd < 0) return;
     send(self->_videoFd, nalu.bytes, nalu.length, 0);
@@ -143,9 +125,7 @@
                 send(_controlFd, &pong, 1, 0);
                 off += 1; break;
             }
-            default:
-                off += 1;
-                break;
+            default: off += 1; break;
         }
     }
 }
