@@ -20,6 +20,7 @@ static const IOHIDDigitizerEventMask kXCDEventTouchMove = 6;
 
 typedef void *(*FnCreateClient)(CFAllocatorRef);
 typedef void  (*FnDispatchEvent)(void *client, IOHIDEventRef event);
+typedef void  (*FnSetProperty)(void *client, CFStringRef key, CFTypeRef value);
 typedef IOHIDEventRef (*FnCreateDigitizer)(
     CFAllocatorRef, CFDictionaryRef,
     unsigned int, unsigned int, unsigned int, unsigned int,
@@ -36,6 +37,7 @@ typedef IOHIDEventRef (*FnCreateDigitizer)(
     FnCreateClient   _createClient;
     FnDispatchEvent  _dispatchEvent;
     FnCreateDigitizer _createDigitizer;
+    FnSetProperty    _setProperty;
     CGFloat _screenW;
     CGFloat _screenH;
 }
@@ -64,11 +66,15 @@ typedef IOHIDEventRef (*FnCreateDigitizer)(
     _createClient   = (FnCreateClient)  dlsym(iokit, "IOHIDEventSystemClientCreate");
     _dispatchEvent  = (FnDispatchEvent) dlsym(iokit, "IOHIDEventSystemClientDispatchEvent");
     _createDigitizer = (FnCreateDigitizer) dlsym(iokit, "IOHIDEventCreateDigitizerEvent");
+    _setProperty    = (FnSetProperty) dlsym(iokit, "IOHIDEventSystemClientSetProperty");
     if (!_createClient || !_dispatchEvent || !_createDigitizer) {
         NSLog(@"[XCD] resolve symbols failed");
         return;
     }
     self.client = _createClient(kCFAllocatorDefault);
+    if (self.client && _setProperty) {
+        _setProperty(self.client, CFSTR("HITestRootUserClient"), kCFBooleanTrue);
+    }
     _ready = (self.client != NULL);
     NSLog(@"[XCD] TouchInjector ready=%d screen=%.0fx%.0f", _ready, _screenW, _screenH);
 }
