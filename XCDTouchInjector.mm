@@ -70,17 +70,19 @@ typedef IOHIDEventRef (*FnCreateDigitizer)(
     _createDigitizer = (FnCreateDigitizer) dlsym(iokit, "IOHIDEventCreateDigitizerEvent");
     _setProperty    = (FnSetProperty) dlsym(iokit, "IOHIDEventSystemClientSetProperty");
     _setSenderID    = (FnSetSenderID) dlsym(iokit, "IOHIDEventSetSenderID");
+    NSLog(@"[XCD] syms: createWithType=%p dispatch=%p createDigitizer=%p setProp=%p setSender=%p",
+          _createClientWithType, _dispatchEvent, _createDigitizer, _setProperty, _setSenderID);
     if (!_createClientWithType || !_dispatchEvent || !_createDigitizer) {
         NSLog(@"[XCD] resolve symbols failed");
         return;
     }
-    // type=1 = kIOHIDEventSystemClientTypeAdmin
-    self.client = _createClientWithType(kCFAllocatorDefault, 1, NULL);
+    // type=3 = Root（最高权限）
+    self.client = _createClientWithType(kCFAllocatorDefault, 3, NULL);
     if (self.client && _setProperty) {
         _setProperty(self.client, CFSTR("HITestRootUserClient"), kCFBooleanTrue);
     }
     _ready = (self.client != NULL);
-    NSLog(@"[XCD] TouchInjector ready=%d screen=%.0fx%.0f", _ready, _screenW, _screenH);
+    NSLog(@"[XCD] TouchInjector ready=%d client=%p screen=%.0fx%.0f", _ready, self.client, _screenW, _screenH);
 }
 
 - (CGPoint)denormalizeX:(float)x y:(float)y {
