@@ -7,6 +7,7 @@
 #import <VideoToolbox/VideoToolbox.h>
 #import <VideoToolbox/VTCompressionSession.h>
 #import <CoreMedia/CoreMedia.h>
+#import <QuartzCore/QuartzCore.h>
 
 @interface XCDVideoEncoder () {
     VTCompressionSessionRef _session;
@@ -69,8 +70,8 @@ static void compressionOutputCallback(void *outputCallbackRefCon,
     bool isKey = false;
     CFArrayRef attachments = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, false);
     if (attachments && CFArrayGetCount(attachments) > 0) {
-        CFDictionaryRef att = CFArrayGetValueAtIndex(attachments, 0);
-        CFBooleanRef notSync = CFDictionaryGetValue(att, kCMSampleAttachmentKey_NotSync);
+        CFDictionaryRef att = (CFDictionaryRef)CFArrayGetValueAtIndex(attachments, 0);
+        CFBooleanRef notSync = (CFBooleanRef)CFDictionaryGetValue(att, kCMSampleAttachmentKey_NotSync);
         isKey = (notSync == NULL);
     }
 
