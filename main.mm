@@ -7,6 +7,8 @@
 #import <sys/socket.h>
 #import <netinet/in.h>
 #import <arpa/inet.h>
+#import <errno.h>
+#import <string.h>
 #import "XCDProtocol.h"
 #import "XCDTouchInjector.h"
 #import "XCDVideoEncoder.h"
@@ -33,7 +35,10 @@
 
 - (BOOL)listenOn:(int)port {
     int fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (fd < 0) return NO;
+    if (fd < 0) {
+        NSLog(@"[XCD] socket failed: %s", strerror(errno));
+        return NO;
+    }
     int yes = 1;
     setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
     setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &yes, sizeof(yes));
@@ -41,7 +46,11 @@
     addr.sin_family = AF_INET;
     addr.sin_addr.s_addr = htonl(INADDR_ANY);
     addr.sin_port = htons(port);
-    if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) { close(fd); return NO; }
+    if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+        NSLog(@"[XCD] bind port %d failed: %s", port, strerror(errno));
+        close(fd);
+        return NO;
+    }
     listen(fd, 4);
     NSLog(@"[XCD] listening on port %d", port);
 
