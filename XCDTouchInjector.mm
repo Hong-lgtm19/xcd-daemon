@@ -6,28 +6,39 @@
 #import <Foundation/Foundation.h>
 #import <dlfcn.h>
 #import <unistd.h>
+#import <mach/mach_time.h>
 
 typedef void *IOHIDEventRef;
-typedef unsigned int IOHIDEventType;
-typedef unsigned int IOHIDDigitizerTransducerType;
-typedef unsigned int IOHIDDigitizerEventMask;
 
-static const IOHIDEventType kXCDEventTypeDigitizer = 11;
-static const IOHIDDigitizerTransducerType kXCDTransducerHand = 1;
-static const IOHIDDigitizerEventMask kXCDEventTouch = 2;
-static const IOHIDDigitizerEventMask kXCDEventPosition = 4;
-static const IOHIDDigitizerEventMask kXCDEventTouchMove = 6;
+// event masks
+enum {
+    kIOHIDDigitizerEventRange    = 0x01,
+    kIOHIDDigitizerEventTouch    = 0x02,
+    kIOHIDDigitizerEventIdentity = 0x04,
+    kIOHIDDigitizerEventPosition = 0x08,
+};
 
-typedef void *(*FnCreateClientWithType)(CFAllocatorRef, unsigned int, CFDictionaryRef);
+// event fields
+enum {
+    kIOHIDEventFieldIsBuiltIn               = 11,
+    kIOHIDEventFieldDigitizerIsDisplayIntegrated = 87,
+};
+
+typedef void *(*FnCreateClient)(CFAllocatorRef);
 typedef void  (*FnDispatchEvent)(void *client, IOHIDEventRef event);
-typedef void  (*FnSetProperty)(void *client, CFStringRef key, CFTypeRef value);
 typedef void  (*FnSetSenderID)(IOHIDEventRef event, uint64_t senderID);
-typedef IOHIDEventRef (*FnCreateDigitizer)(
-    CFAllocatorRef, CFDictionaryRef,
-    unsigned int, unsigned int, unsigned int, unsigned int,
-    unsigned char, unsigned char,
-    double, double, double, double, double, double, double, double, double,
-    unsigned int, unsigned long long);
+typedef void  (*FnSetIntegerValue)(IOHIDEventRef event, int field, int value);
+typedef void  (*FnAppendEvent)(IOHIDEventRef parent, IOHIDEventRef child);
+typedef IOHIDEventRef (*FnCreateDigitizerEvent)(
+    CFAllocatorRef, uint64_t,
+    unsigned int, unsigned int, unsigned int,
+    unsigned int, unsigned int,
+    double, double, double, double, double, double, double, double);
+typedef IOHIDEventRef (*FnCreateFingerEvent)(
+    CFAllocatorRef, uint64_t,
+    unsigned int, unsigned int, unsigned int,
+    double, double, double, double, double,
+    unsigned char, unsigned char, unsigned int);
 
 @interface XCDTouchInjector ()
 @property (nonatomic, assign) void *client;
@@ -35,13 +46,13 @@ typedef IOHIDEventRef (*FnCreateDigitizer)(
 @end
 
 @implementation XCDTouchInjector {
-    FnCreateClientWithType _createClientWithType;
-    FnDispatchEvent  _dispatchEvent;
-    FnCreateDigitizer _createDigitizer;
-    FnSetProperty    _setProperty;
-    FnSetSenderID    _setSenderID;
-    CGFloat _screenW;
-    CGFloat _screenH;
+    FnCreateClient       _createClient;
+    FnDispatchEvent     _dispatchEvent;
+    FnSetSenderID        _setSenderID;
+    FnSetIntegerValue    _setIntegerValue;
+    FnAppendEvent        _appendEvent;
+    FnCreateDigitizerEvent _createDigitizerEvent;
+    FnCreateFingerEvent  _createFingerEvent;
 }
 
 + (instancetype)sharedInjector {
@@ -54,9 +65,6 @@ typedef IOHIDEventRef (*FnCreateDigitizer)(
 - (instancetype)init {
     self = [super init];
     if (self) {
-        UIScreen *s = [UIScreen mainScreen];
-        _screenW = s.nativeBounds.size.width;
-        _screenH = s.nativeBounds.size.height;
         [self resolvePrivateSymbols];
     }
     return self;
@@ -65,83 +73,93 @@ typedef IOHIDEventRef (*FnCreateDigitizer)(
 - (void)resolvePrivateSymbols {
     void *iokit = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_LAZY);
     if (!iokit) { NSLog(@"[XCD] IOKit dlopen failed"); return; }
-    _createClientWithType = (FnCreateClientWithType) dlsym(iokit, "IOHIDEventSystemClientCreateWithType");
-    _dispatchEvent  = (FnDispatchEvent) dlsym(iokit, "IOHIDEventSystemClientDispatchEvent");
-    _createDigitizer = (FnCreateDigitizer) dlsym(iokit, "IOHIDEventCreateDigitizerEvent");
-    _setProperty    = (FnSetProperty) dlsym(iokit, "IOHIDEventSystemClientSetProperty");
-    _setSenderID    = (FnSetSenderID) dlsym(iokit, "IOHIDEventSetSenderID");
-    NSLog(@"[XCD] syms: createWithType=%p dispatch=%p createDigitizer=%p setProp=%p setSender=%p",
-          _createClientWithType, _dispatchEvent, _createDigitizer, _setProperty, _setSenderID);
-    if (!_createClientWithType || !_dispatchEvent || !_createDigitizer) {
+    _createClient       = (FnCreateClient) dlsym(iokit, "IOHIDEventSystemClientCreate");
+    _dispatchEvent      = (FnDispatchEvent) dlsym(iokit, "IOHIDEventSystemClientDispatchEvent");
+    _setSenderID        = (FnSetSenderID) dlsym(iokit, "IOHIDEventSetSenderID");
+    _setIntegerValue    = (FnSetIntegerValue) dlsym(iokit, "IOHIDEventSetIntegerValue");
+    _appendEvent        = (FnAppendEvent) dlsym(iokit, "IOHIDEventAppendEvent");
+    _createDigitizerEvent = (FnCreateDigitizerEvent) dlsym(iokit, "IOHIDEventCreateDigitizerEvent");
+    _createFingerEvent  = (FnCreateFingerEvent) dlsym(iokit, "IOHIDEventCreateDigitizerFingerEvent");
+    NSLog(@"[XCD] syms: create=%p dispatch=%p setSender=%p setInt=%p append=%p createDig=%p createFinger=%p",
+          _createClient, _dispatchEvent, _setSenderID, _setIntegerValue, _appendEvent, _createDigitizerEvent, _createFingerEvent);
+    if (!_createClient || !_dispatchEvent || !_createDigitizerEvent || !_createFingerEvent) {
         NSLog(@"[XCD] resolve symbols failed");
         return;
     }
-    // type=2 = Admin（参考代码用的就是这个）
-    self.client = _createClientWithType(kCFAllocatorDefault, 2, NULL);
-    if (self.client && _setProperty) {
-        _setProperty(self.client, CFSTR("HITestRootUserClient"), kCFBooleanTrue);
-    }
+    self.client = _createClient(kCFAllocatorDefault);
     _ready = (self.client != NULL);
-    NSLog(@"[XCD] TouchInjector ready=%d client=%p screen=%.0fx%.0f", _ready, self.client, _screenW, _screenH);
+    NSLog(@"[XCD] TouchInjector ready=%d client=%p", _ready, self.client);
 }
 
-- (CGPoint)denormalizeX:(float)x y:(float)y {
-    return CGPointMake(x * _screenW, y * _screenH);
-}
-
-- (void)injectTouchType:(IOHIDDigitizerEventMask)type
-                     x:(float)x y:(float)y
-                touchId:(uint32_t)touchId {
+- (void)postTouchX:(float)x y:(float)y touchDown:(BOOL)down touchUp:(BOOL)up {
     if (!_ready) return;
-    CGPoint p = [self denormalizeX:x y:y];
 
-    NSDictionary *props = @{
-        @"DigitizerIndex"     : @(touchId),
-        @"DigitizerIdentity"  : @(touchId + 1),
-        @"DigitizerEventMask" : @(type),
-    };
-    CFDictionaryRef propDict = (CFDictionaryRef)CFBridgingRetain(props);
+    uint32_t parentFlags, childFlags;
+    if (down) {
+        parentFlags = kIOHIDDigitizerEventRange | kIOHIDDigitizerEventTouch | kIOHIDDigitizerEventIdentity;
+        childFlags  = kIOHIDDigitizerEventRange | kIOHIDDigitizerEventTouch;
+    } else if (up) {
+        parentFlags = kIOHIDDigitizerEventRange | kIOHIDDigitizerEventTouch | kIOHIDDigitizerEventIdentity | kIOHIDDigitizerEventPosition;
+        childFlags  = kIOHIDDigitizerEventRange | kIOHIDDigitizerEventTouch;
+    } else {
+        parentFlags = kIOHIDDigitizerEventPosition;
+        childFlags  = kIOHIDDigitizerEventPosition;
+    }
 
-    unsigned char touching = (type != 0) ? 1 : 0;
+    uint64_t now = mach_absolute_time();
+    unsigned char touch = down ? 1 : 0;
 
-    IOHIDEventRef event = _createDigitizer(
+    IOHIDEventRef parent = _createDigitizerEvent(
         kCFAllocatorDefault,
-        propDict,
-        kXCDEventTypeDigitizer,
-        kXCDTransducerHand,
-        touchId,
-        touchId + 1,
-        touching,
-        0,
-        0.0, 0.0,
-        p.x, p.y,
-        0.0,
-        touching ? 1.0 : 0.0,
-        0.0, 0.0, 0.0,
-        0,
-        0ULL
+        now,
+        1,                    // transducerType = Hand
+        1 << 22,              // index
+        1,                    // identity
+        parentFlags,
+        0,                    // buttonMask
+        x, y, 0, 0, 0, 0, 0, 0
     );
 
-    if (event) {
-        if (_setSenderID) {
-            _setSenderID(event, 0xDEFACEDBEEFFECE5ULL);
-        }
-        _dispatchEvent(self.client, event);
-        CFRelease(event);
+    if (_setIntegerValue) {
+        _setIntegerValue(parent, kIOHIDEventFieldIsBuiltIn, 1);
+        _setIntegerValue(parent, kIOHIDEventFieldDigitizerIsDisplayIntegrated, 1);
     }
-    CFRelease(propDict);
+    if (_setSenderID) {
+        _setSenderID(parent, 0x8000000817319375ULL);
+    }
+
+    IOHIDEventRef child = _createFingerEvent(
+        kCFAllocatorDefault,
+        now,
+        3,                    // index
+        2,                    // identity
+        childFlags,
+        x, y, 0, 0, 0,
+        touch, touch,
+        0
+    );
+
+    if (_appendEvent && parent && child) {
+        _appendEvent(parent, child);
+    }
+    if (child) CFRelease(child);
+
+    if (parent) {
+        _dispatchEvent(self.client, parent);
+        CFRelease(parent);
+    }
 }
 
 - (void)touchDownX:(float)x y:(float)y touchId:(uint8_t)tid {
-    [self injectTouchType:kXCDEventTouchMove x:x y:y touchId:tid];
+    [self postTouchX:x y:y touchDown:YES touchUp:NO];
 }
 
 - (void)touchMoveX:(float)x y:(float)y touchId:(uint8_t)tid {
-    [self injectTouchType:kXCDEventTouchMove x:x y:y touchId:tid];
+    [self postTouchX:x y:y touchDown:NO touchUp:NO];
 }
 
 - (void)touchUpTouchId:(uint8_t)tid {
-    [self injectTouchType:0 x:0 y:0 touchId:tid];
+    [self postTouchX:0 y:0 touchDown:NO touchUp:YES];
 }
 
 - (void)swipeFromX:(float)x1 y1:(float)y1 x2:(float)x2 y2:(float)y2 duration:(float)sec {
