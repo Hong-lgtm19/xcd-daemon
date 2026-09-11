@@ -10,10 +10,9 @@
 #import <dlfcn.h>
 
 typedef void *IOMFBConnection;
-typedef void *IOSurfaceRef;
 
-typedef IOReturn (*IOMFBGetMainDisplay_t)(IOMFBConnection *);
-typedef IOReturn (*IOMFBGetSurface_t)(IOMFBConnection, int plane, IOSurfaceRef *);
+typedef int32_t (*IOMFBGetMainDisplay_t)(IOMFBConnection *);
+typedef int32_t (*IOMFBGetSurface_t)(IOMFBConnection, int plane, IOSurfaceRef *);
 
 typedef size_t  (*ISGetWidth_t)(IOSurfaceRef);
 typedef size_t  (*ISGetHeight_t)(IOSurfaceRef);
@@ -44,8 +43,8 @@ typedef size_t  (*ISGetBytesPerRow_t)(IOSurfaceRef);
     IOMFBGetMainDisplay_t getMain = (IOMFBGetMainDisplay_t)dlsym(h, "IOMobileFramebufferGetMainDisplay");
     IOMFBGetSurface_t getSurface = (IOMFBGetSurface_t)dlsym(h, "IOMobileFramebufferGetLayerDefaultSurface");
     if (!getMain || !getSurface) { NSLog(@"[XCD] IOMFB symbols not found"); return NO; }
-    if (getMain(&_framebuffer) != kIOReturnSuccess) { NSLog(@"[XCD] getMainDisplay failed"); return NO; }
-    if (getSurface(_framebuffer, 0, &_surface) != kIOReturnSuccess || !_surface) { NSLog(@"[XCD] getSurface failed"); return NO; }
+    if (getMain(&_framebuffer) != 0) { NSLog(@"[XCD] getMainDisplay failed"); return NO; }
+    if (getSurface(_framebuffer, 0, &_surface) != 0 || !_surface) { NSLog(@"[XCD] getSurface failed"); return NO; }
 
     void *ish = dlopen("/System/Library/Frameworks/IOSurface.framework/IOSurface", RTLD_LAZY);
     if (!ish) { NSLog(@"[XCD] IOSurface dlopen failed"); return NO; }
@@ -96,4 +95,3 @@ typedef size_t  (*ISGetBytesPerRow_t)(IOSurfaceRef);
 - (void)dealloc { [self stop]; }
 
 @end
-
